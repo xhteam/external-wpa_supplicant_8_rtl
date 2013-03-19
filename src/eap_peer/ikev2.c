@@ -2,14 +2,8 @@
  * IKEv2 responder (RFC 4306) for EAP-IKEV2
  * Copyright (c) 2007, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -425,7 +419,7 @@ static int ikev2_process_kei(struct ikev2_responder_data *data,
 	}
 
 	/* RFC 4306, Section 3.4:
-	 * The length of DH public value MUST be equal to the lenght of the
+	 * The length of DH public value MUST be equal to the length of the
 	 * prime modulus.
 	 */
 	if (kei_len - 4 != data->dh->prime_len) {

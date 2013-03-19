@@ -2,14 +2,8 @@
  * wpa_supplicant/hostapd control interface library
  * Copyright (c) 2004-2006, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #ifndef WPA_CTRL_H
@@ -54,6 +48,10 @@ extern "C" {
 #define WPA_EVENT_EAP_SUCCESS "CTRL-EVENT-EAP-SUCCESS "
 /** EAP authentication failed (EAP-Failure received) */
 #define WPA_EVENT_EAP_FAILURE "CTRL-EVENT-EAP-FAILURE "
+/** Network block temporarily disabled (e.g., due to authentication failure) */
+#define WPA_EVENT_TEMP_DISABLED "CTRL-EVENT-SSID-TEMP-DISABLED "
+/** Temporarily disabled network block re-enabled */
+#define WPA_EVENT_REENABLED "CTRL-EVENT-SSID-REENABLED "
 /** New scan results available */
 #define WPA_EVENT_SCAN_RESULTS "CTRL-EVENT-SCAN-RESULTS "
 /** wpa_supplicant state change */
@@ -62,6 +60,10 @@ extern "C" {
 #define WPA_EVENT_BSS_ADDED "CTRL-EVENT-BSS-ADDED "
 /** A BSS entry was removed (followed by BSS entry id and BSSID) */
 #define WPA_EVENT_BSS_REMOVED "CTRL-EVENT-BSS-REMOVED "
+#ifdef ANDROID_P2P
+/** Notify the Userspace about the freq conflict */
+#define WPA_EVENT_FREQ_CONFLICT "CTRL-EVENT-FREQ-CONFLICT "
+#endif
 
 /** WPS overlap detected in PBC mode */
 #define WPS_EVENT_OVERLAP "WPS-OVERLAP-DETECTED "
@@ -100,10 +102,8 @@ extern "C" {
 /** P2P device found */
 #define P2P_EVENT_DEVICE_FOUND "P2P-DEVICE-FOUND "
 
-#ifdef ANDROID_BRCM_P2P_PATCH
 /** P2P device lost */
 #define P2P_EVENT_DEVICE_LOST "P2P-DEVICE-LOST "
-#endif
 
 /** A P2P device requested GO negotiation, but we were not ready to start the
  * negotiation */
@@ -124,12 +124,20 @@ extern "C" {
 #define P2P_EVENT_PROV_DISC_PBC_REQ "P2P-PROV-DISC-PBC-REQ "
 /* parameters: <peer address> */
 #define P2P_EVENT_PROV_DISC_PBC_RESP "P2P-PROV-DISC-PBC-RESP "
+/* parameters: <peer address> <status> */
+#define P2P_EVENT_PROV_DISC_FAILURE "P2P-PROV-DISC-FAILURE"
 /* parameters: <freq> <src addr> <dialog token> <update indicator> <TLVs> */
 #define P2P_EVENT_SERV_DISC_REQ "P2P-SERV-DISC-REQ "
 /* parameters: <src addr> <update indicator> <TLVs> */
 #define P2P_EVENT_SERV_DISC_RESP "P2P-SERV-DISC-RESP "
 #define P2P_EVENT_INVITATION_RECEIVED "P2P-INVITATION-RECEIVED "
 #define P2P_EVENT_INVITATION_RESULT "P2P-INVITATION-RESULT "
+#define P2P_EVENT_FIND_STOPPED "P2P-FIND-STOPPED "
+
+#define INTERWORKING_AP "INTERWORKING-AP "
+#define INTERWORKING_NO_MATCH "INTERWORKING-NO-MATCH "
+
+#define GAS_RESPONSE_INFO "GAS-RESPONSE-INFO "
 
 /* hostapd control interface - fixed message prefixes */
 #define WPS_EVENT_PIN_NEEDED "WPS-PIN-NEEDED "
@@ -141,6 +149,28 @@ extern "C" {
 #define WPS_EVENT_AP_PIN_DISABLED "WPS-AP-PIN-DISABLED "
 #define AP_STA_CONNECTED "AP-STA-CONNECTED "
 #define AP_STA_DISCONNECTED "AP-STA-DISCONNECTED "
+
+
+/* BSS command information masks */
+
+#define WPA_BSS_MASK_ALL		0xFFFFFFFF
+#define WPA_BSS_MASK_ID			BIT(0)
+#define WPA_BSS_MASK_BSSID		BIT(1)
+#define WPA_BSS_MASK_FREQ		BIT(2)
+#define WPA_BSS_MASK_BEACON_INT		BIT(3)
+#define WPA_BSS_MASK_CAPABILITIES	BIT(4)
+#define WPA_BSS_MASK_QUAL		BIT(5)
+#define WPA_BSS_MASK_NOISE		BIT(6)
+#define WPA_BSS_MASK_LEVEL		BIT(7)
+#define WPA_BSS_MASK_TSF		BIT(8)
+#define WPA_BSS_MASK_AGE		BIT(9)
+#define WPA_BSS_MASK_IE			BIT(10)
+#define WPA_BSS_MASK_FLAGS		BIT(11)
+#define WPA_BSS_MASK_SSID		BIT(12)
+#define WPA_BSS_MASK_WPS_SCAN		BIT(13)
+#define WPA_BSS_MASK_P2P_SCAN		BIT(14)
+#define WPA_BSS_MASK_INTERNETW		BIT(15)
+#define WPA_BSS_MASK_WIFI_DISPLAY	BIT(16)
 
 
 /* wpa_supplicant/hostapd control interface access */
@@ -267,9 +297,25 @@ int wpa_ctrl_pending(struct wpa_ctrl *ctrl);
  */
 int wpa_ctrl_get_fd(struct wpa_ctrl *ctrl);
 
+char * wpa_ctrl_get_remote_ifname(struct wpa_ctrl *ctrl);
+
+#ifdef ANDROID
+/**
+ * wpa_ctrl_cleanup() - Delete any local UNIX domain socket files that
+ * may be left over from clients that were previously connected to
+ * wpa_supplicant. This keeps these files from being orphaned in the
+ * event of crashes that prevented them from being removed as part
+ * of the normal orderly shutdown.
+ */
+void wpa_ctrl_cleanup(void);
+#endif /* ANDROID */
+
 #ifdef CONFIG_CTRL_IFACE_UDP
+/* Port range for multiple wpa_supplicant instances and multiple VIFs */
 #define WPA_CTRL_IFACE_PORT 9877
+#define WPA_CTRL_IFACE_PORT_LIMIT 50 /* decremented from start */
 #define WPA_GLOBAL_CTRL_IFACE_PORT 9878
+#define WPA_GLOBAL_CTRL_IFACE_PORT_LIMIT 20 /* incremented from start */
 #endif /* CONFIG_CTRL_IFACE_UDP */
 
 

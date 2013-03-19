@@ -2,14 +2,8 @@
  * P2P - IE parser
  * Copyright (c) 2009-2010, Atheros Communications
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -325,6 +319,124 @@ int p2p_parse_p2p_ie(const struct wpabuf *buf, struct p2p_message *msg)
 }
 
 
+#ifdef CONFIG_WFD
+static int p2p_parse_wfd_attribute(u8 id, const u8 *data, u16 len,
+			       struct p2p_message *msg)
+{
+	int len_check = 0;
+	u16 wfd_device_info = 0;
+
+	switch (id) {
+	case WFD_ATTR_DEVICE_INFO:
+		if (len < 6) {
+			wpa_printf(MSG_DEBUG, "WFD: Too short Device Info "
+				   "attribute (length %d)", len);
+			return -1;
+		}
+		wfd_device_info = WPA_GET_BE16(data);
+		wpa_printf(MSG_DEBUG, "WFD: WFD Device Information "
+			   "0x%04x", wfd_device_info);
+		if (wfd_device_info & WFD_DEVINFO_SESSION_AVAIL)
+		{
+			msg->session_avail = 1;
+		}
+
+		msg->wfd_device_type = ( u8 ) (wfd_device_info & 0x03 );
+
+		msg->rtsp_ctrlport = WPA_GET_BE16(data + 2);
+		wpa_printf(MSG_DEBUG, "WFD: Session Management "
+			   "Control Port (%d)", msg->rtsp_ctrlport);
+		break;
+	case WFD_ATTR_ASSOC_BSSID:
+		if (len_check == 1)
+		if (len < 6) {
+			wpa_printf(MSG_DEBUG, "WFD: Too short Assoc Bssid "
+				   "attribute (length %d)", len);
+			return -1;
+		}
+		wpa_hexdump(MSG_MSGDUMP, "WFD: Data", data, len);
+		break;
+	case WFD_ATTR_COUPLED_SINK_INFO:
+		if (len_check == 1)
+		if (len < 7) {
+			wpa_printf(MSG_DEBUG, "WFD: Too short Coupled Sink Info "
+				   "attribute (length %d)", len);
+			return -1;
+		}
+		wpa_hexdump(MSG_MSGDUMP, "WFD: Data", data, len);
+		break;
+	case WFD_ATTR_LOCAL_IP_ADDR:
+		if (len_check == 1)
+		if (len < 5) {
+			wpa_printf(MSG_DEBUG, "WFD: Too short Local IP Addr "
+				   "attribute (length %d)", len);
+			return -1;
+		}
+		wpa_hexdump(MSG_MSGDUMP, "WFD: Data", data, len);
+		break;
+	case WFD_ATTR_SESSION_INFO:
+		if (len_check == 1)
+		if (len < 23) {
+			wpa_printf(MSG_DEBUG, "WFD: Too short Capability "
+				   "attribute (length %d)", len);
+			return -1;
+		}
+		wpa_hexdump(MSG_MSGDUMP, "WFD: Data", data, len);
+		break;
+	case WFD_ATTR_ALTER_MAC:
+		if (len_check == 1)
+		if (len < 6) {
+			wpa_printf(MSG_DEBUG, "WFD: Too short Capability "
+				   "attribute (length %d)", len);
+			return -1;
+		}
+		wpa_hexdump(MSG_MSGDUMP, "WFD: Data", data, len);
+		break;
+	default:
+		wpa_printf(MSG_DEBUG, "P2P: Skipped unknown attribute %d "
+			   "(length %d)", id, len);
+		break;
+	}
+
+	return 0;
+}
+
+
+int p2p_parse_wfd_ie(const struct wpabuf *buf, struct p2p_message *msg)
+{
+	const u8 *pos = wpabuf_head_u8(buf);
+	const u8 *end = pos + wpabuf_len(buf);
+
+	wpa_printf(MSG_DEBUG, "P2P: Parsing WFD IE");
+
+	msg->wfd_enable = 1;
+
+	while (pos < end) {
+		u16 attr_len;
+		if (pos + 2 >= end) {
+			wpa_printf(MSG_DEBUG, "P2P: Invalid P2P attribute");
+			return -1;
+		}
+		attr_len = WPA_GET_BE16(pos + 1);
+		wpa_printf(MSG_DEBUG, "P2P: Attribute %d length %u",
+			   pos[0], attr_len);
+		if (pos + 3 + attr_len > end) {
+			wpa_printf(MSG_DEBUG, "P2P: Attribute underflow "
+				   "(len=%u left=%d)",
+				   attr_len, (int) (end - pos - 3));
+			wpa_hexdump(MSG_MSGDUMP, "P2P: Data", pos, end - pos);
+			return -1;
+		}
+		if (p2p_parse_wfd_attribute(pos[0], pos + 3, attr_len, msg))
+			return -1;
+		pos += 3 + attr_len;
+	}
+
+	return 0;
+}
+#endif //CONFIG_WFD
+
+
 static int p2p_parse_wps_ie(const struct wpabuf *buf, struct p2p_message *msg)
 {
 	struct wps_parse_attr attr;
@@ -420,6 +532,26 @@ int p2p_parse_ies(const u8 *data, size_t len, struct p2p_message *msg)
 		return -1;
 	}
 
+#ifdef CONFIG_WIFI_DISPLAY
+	if (elems.wfd) {
+		msg->wfd_subelems = ieee802_11_vendor_ie_concat(
+			data, len, WFD_IE_VENDOR_TYPE);
+	}
+#endif /* CONFIG_WIFI_DISPLAY */
+#ifdef CONFIG_WFD
+	msg->wfd_attributes = ieee802_11_vendor_ie_concat(data, len,
+							  WFD_IE_VENDOR_TYPE);
+	if (msg->wfd_attributes &&
+	    p2p_parse_wfd_ie(msg->wfd_attributes, msg)) {
+		wpa_printf(MSG_DEBUG, "P2P: Failed to parse WFD IE data");
+		if (msg->wfd_attributes)
+			wpa_hexdump_buf(MSG_MSGDUMP, "P2P: WFD IE data",
+					msg->wfd_attributes);
+		p2p_parse_free(msg);
+		return -1;
+	}
+#endif //CONFIG_WFD
+
 	return 0;
 }
 
@@ -459,6 +591,10 @@ void p2p_parse_free(struct p2p_message *msg)
 	msg->p2p_attributes = NULL;
 	wpabuf_free(msg->wps_attributes);
 	msg->wps_attributes = NULL;
+#ifdef CONFIG_WIFI_DISPLAY
+	wpabuf_free(msg->wfd_subelems);
+	msg->wfd_subelems = NULL;
+#endif /* CONFIG_WIFI_DISPLAY */
 }
 
 

@@ -2,14 +2,8 @@
  * WPA definitions shared between hostapd and wpa_supplicant
  * Copyright (c) 2002-2008, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #ifndef WPA_COMMON_H
@@ -70,6 +64,7 @@
 #define RSN_CIPHER_SUITE_AES_128_CMAC RSN_SELECTOR(0x00, 0x0f, 0xac, 6)
 #endif /* CONFIG_IEEE80211W */
 #define RSN_CIPHER_SUITE_NO_GROUP_ADDRESSED RSN_SELECTOR(0x00, 0x0f, 0xac, 7)
+#define RSN_CIPHER_SUITE_GCMP RSN_SELECTOR(0x00, 0x0f, 0xac, 8)
 
 /* EAPOL-Key Key Data Encapsulation
  * GroupKey and PeerKey require encryption, otherwise, encryption is optional.
@@ -89,6 +84,9 @@
 #ifdef CONFIG_IEEE80211W
 #define RSN_KEY_DATA_IGTK RSN_SELECTOR(0x00, 0x0f, 0xac, 9)
 #endif /* CONFIG_IEEE80211W */
+#define RSN_KEY_DATA_KEYID RSN_SELECTOR(0x00, 0x0f, 0xac, 10)
+#define RSN_KEY_DATA_MULTIBAND_GTK RSN_SELECTOR(0x00, 0x0f, 0xac, 11)
+#define RSN_KEY_DATA_MULTIBAND_KEYID RSN_SELECTOR(0x00, 0x0f, 0xac, 12)
 
 #define WPA_OUI_TYPE RSN_SELECTOR(0x00, 0x50, 0xf2, 1)
 
@@ -357,5 +355,36 @@ int wpa_compare_rsn_ie(int ft_initial_assoc,
 		       const u8 *ie1, size_t ie1len,
 		       const u8 *ie2, size_t ie2len);
 int wpa_insert_pmkid(u8 *ies, size_t ies_len, const u8 *pmkid);
+
+struct wpa_ft_ies {
+	const u8 *mdie;
+	size_t mdie_len;
+	const u8 *ftie;
+	size_t ftie_len;
+	const u8 *r1kh_id;
+	const u8 *gtk;
+	size_t gtk_len;
+	const u8 *r0kh_id;
+	size_t r0kh_id_len;
+	const u8 *rsn;
+	size_t rsn_len;
+	const u8 *rsn_pmkid;
+	const u8 *tie;
+	size_t tie_len;
+	const u8 *igtk;
+	size_t igtk_len;
+	const u8 *ric;
+	size_t ric_len;
+};
+
+int wpa_ft_parse_ies(const u8 *ies, size_t ies_len, struct wpa_ft_ies *parse);
+
+int wpa_cipher_key_len(int cipher);
+int wpa_cipher_rsc_len(int cipher);
+int wpa_cipher_to_alg(int cipher);
+int wpa_cipher_valid_pairwise(int cipher);
+u32 wpa_cipher_to_suite(int proto, int cipher);
+int rsn_cipher_put_suites(u8 *pos, int ciphers);
+int wpa_cipher_put_suites(u8 *pos, int ciphers);
 
 #endif /* WPA_COMMON_H */

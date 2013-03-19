@@ -2,22 +2,20 @@
  * OS specific functions for UNIX/POSIX systems
  * Copyright (c) 2005-2009, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
 
+#include <time.h>
+
 #ifdef ANDROID
 #include <linux/capability.h>
 #include <linux/prctl.h>
+#if !defined(PURE_LINUX)
 #include <private/android_filesystem_config.h>
+#endif /* !defined(PURE_LINUX) */
 #endif /* ANDROID */
 
 #include "os.h"
@@ -25,9 +23,9 @@
 #ifdef WPA_TRACE
 
 #include "common.h"
-#include "list.h"
 #include "wpa_debug.h"
 #include "trace.h"
+#include "list.h"
 
 static struct dl_list alloc_list;
 
@@ -100,6 +98,24 @@ int os_mktime(int year, int month, int day, int hour, int min, int sec,
 		tz_offset = 0;
 
 	*t = (os_time_t) t_local - tz_offset;
+	return 0;
+}
+
+
+int os_gmtime(os_time_t t, struct os_tm *tm)
+{
+	struct tm *tm2;
+	time_t t2 = t;
+
+	tm2 = gmtime(&t2);
+	if (tm2 == NULL)
+		return -1;
+	tm->sec = tm2->tm_sec;
+	tm->min = tm2->tm_min;
+	tm->hour = tm2->tm_hour;
+	tm->day = tm2->tm_mday;
+	tm->month = tm2->tm_mon + 1;
+	tm->year = tm2->tm_year + 1900;
 	return 0;
 }
 
@@ -238,7 +254,7 @@ char * os_rel2abs_path(const char *rel_path)
 
 int os_program_init(void)
 {
-#ifdef ANDROID
+#if defined(ANDROID) && !defined(PURE_LINUX)
 	/*
 	 * We ignore errors here since errors are normal if we
 	 * are already running as non-root.

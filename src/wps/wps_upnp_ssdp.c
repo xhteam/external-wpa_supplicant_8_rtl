@@ -97,16 +97,6 @@ static int line_length(const char *l)
 }
 
 
-/* No. of chars excluding trailing whitespace */
-static int line_length_stripped(const char *l)
-{
-	const char *lp = l + line_length(l);
-	while (lp > l && !isgraph(lp[-1]))
-		lp--;
-	return lp - l;
-}
-
-
 static int str_starts(const char *str, const char *start)
 {
 	return os_strncmp(str, start, os_strlen(start)) == 0;
@@ -530,7 +520,6 @@ static void ssdp_parse_msearch(struct upnp_wps_device_sm *sm,
 #ifndef CONFIG_NO_STDOUT_DEBUG
 	const char *start = data;
 #endif /* CONFIG_NO_STDOUT_DEBUG */
-	const char *end;
 	int got_host = 0;
 	int got_st = 0, st_match = 0;
 	int got_man = 0;
@@ -545,7 +534,6 @@ static void ssdp_parse_msearch(struct upnp_wps_device_sm *sm,
 
 	/* Parse remaining lines */
 	for (; *data != '\0'; data += line_length(data)) {
-		end = data + line_length_stripped(data);
 		if (token_eq(data, "host")) {
 			/* The host line indicates who the packet
 			 * is addressed to... but do we really care?
@@ -878,20 +866,24 @@ int ssdp_open_multicast_sock(u32 ip_addr)
 		return -1;
 
 #if 0   /* maybe ok if we sometimes block on writes */
-	if (fcntl(sd, F_SETFL, O_NONBLOCK) != 0)
+	if (fcntl(sd, F_SETFL, O_NONBLOCK) != 0) {
+		close(sd);
 		return -1;
+	}
 #endif
 
 	if (setsockopt(sd, IPPROTO_IP, IP_MULTICAST_IF,
 		       &ip_addr, sizeof(ip_addr))) {
 		wpa_printf(MSG_DEBUG, "WPS: setsockopt(IP_MULTICAST_IF) %x: "
 			   "%d (%s)", ip_addr, errno, strerror(errno));
+		close(sd);
 		return -1;
 	}
 	if (setsockopt(sd, IPPROTO_IP, IP_MULTICAST_TTL,
 		       &ttl, sizeof(ttl))) {
 		wpa_printf(MSG_DEBUG, "WPS: setsockopt(IP_MULTICAST_TTL): "
 			   "%d (%s)", errno, strerror(errno));
+		close(sd);
 		return -1;
 	}
 
@@ -910,6 +902,7 @@ int ssdp_open_multicast_sock(u32 ip_addr)
 				   "WPS UPnP: setsockopt "
 				   "IP_ADD_MEMBERSHIP errno %d (%s)",
 				   errno, strerror(errno));
+			close(sd);
 			return -1;
 		}
 	}

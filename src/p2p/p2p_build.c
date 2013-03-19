@@ -2,14 +2,8 @@
  * P2P - IE builder
  * Copyright (c) 2009-2010, Atheros Communications
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -138,9 +132,9 @@ void p2p_buf_add_channel_list(struct wpabuf *buf, const char *country,
 
 	/* Update attribute length */
 	WPA_PUT_LE16(len, (u8 *) wpabuf_put(buf, 0) - len - 2);
-	wpa_printf(MSG_DEBUG, "P2P: * Channel List");
+	wpa_hexdump(MSG_DEBUG, "P2P: * Channel List",
+		    len + 2, (u8 *) wpabuf_put(buf, 0) - len - 2);
 }
-
 
 void p2p_buf_add_status(struct wpabuf *buf, u8 status)
 {
@@ -164,27 +158,20 @@ void p2p_buf_add_device_info(struct wpabuf *buf, struct p2p_data *p2p,
 	len = wpabuf_put(buf, 2); /* IE length to be filled */
 
 	/* P2P Device address */
-#ifdef ANDROID_BRCM_P2P_PATCH
-	/* 
-	* P2P_ADDR: Supplicant uses primary mac addr for p2p and hence advertises that. To
-	* to make it compatible with solution using virtual interface for P2P, a new variable
-	* is added to hold the actual p2p device address.
-	*/
-	wpabuf_put_data(buf, p2p->cfg->p2p_dev_addr, ETH_ALEN);
-#else
 	wpabuf_put_data(buf, p2p->cfg->dev_addr, ETH_ALEN);
-#endif
 
 	/* Config Methods */
 	methods = 0;
 	if (peer && peer->wps_method != WPS_NOT_READY) {
 		if (peer->wps_method == WPS_PBC)
 			methods |= WPS_CONFIG_PUSHBUTTON;
-		else if (peer->wps_method == WPS_PIN_LABEL)
-			methods |= WPS_CONFIG_LABEL;
 		else if (peer->wps_method == WPS_PIN_DISPLAY ||
 			 peer->wps_method == WPS_PIN_KEYPAD)
 			methods |= WPS_CONFIG_DISPLAY | WPS_CONFIG_KEYPAD;
+	} else if (p2p->cfg->config_methods) {
+		methods |= p2p->cfg->config_methods &
+			(WPS_CONFIG_PUSHBUTTON | WPS_CONFIG_DISPLAY |
+			 WPS_CONFIG_KEYPAD);
 	} else {
 		methods |= WPS_CONFIG_PUSHBUTTON;
 		methods |= WPS_CONFIG_DISPLAY | WPS_CONFIG_KEYPAD;
@@ -338,6 +325,25 @@ void p2p_buf_add_p2p_interface(struct wpabuf *buf, struct p2p_data *p2p)
 	wpabuf_put_data(buf, p2p->cfg->dev_addr, ETH_ALEN);
 }
 
+#ifdef CONFIG_WFD
+void p2p_buf_add_wfd_ie(struct wpabuf *buf)
+{
+	u16 device_info_bitmap = 0;
+	u16 sess_mng_ctl_port = 8554; // Default port
+	u16 wfd_dev_max_thruput = 8; // 8Mbps max throughput
+	device_info_bitmap |= 1 << 4; //available for WFD session
+
+	wpabuf_put_u8(buf, WLAN_EID_VENDOR_SPECIFIC );
+	wpabuf_put_u8(buf, 13 );
+	wpabuf_put_be24(buf, OUI_WFA);
+	wpabuf_put_u8(buf, 0xA );// WFD OUI TYPE
+	wpabuf_put_u8(buf, 0 );  // Device Info subelement
+	wpabuf_put_be16(buf, 6); //length
+	wpabuf_put_be16(buf, device_info_bitmap );
+	wpabuf_put_be16(buf, sess_mng_ctl_port );
+	wpabuf_put_be16(buf, wfd_dev_max_thruput);
+}
+#endif
 
 static void p2p_add_wps_string(struct wpabuf *buf, enum wps_attribute attr,
 			       const char *val)
@@ -364,7 +370,7 @@ static void p2p_add_wps_string(struct wpabuf *buf, enum wps_attribute attr,
 }
 
 
-void p2p_build_wps_ie(struct p2p_data *p2p, struct wpabuf *buf, u16 pw_id,
+void p2p_build_wps_ie(struct p2p_data *p2p, struct wpabuf *buf, int pw_id,
 		      int all_attr)
 {
 	u8 *len;
@@ -382,11 +388,14 @@ void p2p_build_wps_ie(struct p2p_data *p2p, struct wpabuf *buf, u16 pw_id,
 		wpabuf_put_u8(buf, WPS_STATE_NOT_CONFIGURED);
 	}
 
-	/* Device Password ID */
-	wpabuf_put_be16(buf, ATTR_DEV_PASSWORD_ID);
-	wpabuf_put_be16(buf, 2);
-	wpa_printf(MSG_DEBUG, "P2P: WPS IE Device Password ID: %d", pw_id);
-	wpabuf_put_be16(buf, pw_id);
+	if (pw_id >= 0) {
+		/* Device Password ID */
+		wpabuf_put_be16(buf, ATTR_DEV_PASSWORD_ID);
+		wpabuf_put_be16(buf, 2);
+		wpa_printf(MSG_DEBUG, "P2P: WPS IE Device Password ID: %d",
+			   pw_id);
+		wpabuf_put_be16(buf, pw_id);
+	}
 
 	if (all_attr) {
 		wpabuf_put_be16(buf, ATTR_RESPONSE_TYPE);

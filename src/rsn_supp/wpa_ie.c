@@ -2,14 +2,8 @@
  * wpa_supplicant - WPA/RSN IE and KDE processing
  * Copyright (c) 2003-2008, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -47,6 +41,7 @@ static int wpa_gen_wpa_ie_wpa(u8 *wpa_ie, size_t wpa_ie_len,
 {
 	u8 *pos;
 	struct wpa_ie_hdr *hdr;
+	u32 suite;
 
 	if (wpa_ie_len < sizeof(*hdr) + WPA_SELECTOR_LEN +
 	    2 + WPA_SELECTOR_LEN + 2 + WPA_SELECTOR_LEN)
@@ -58,34 +53,26 @@ static int wpa_gen_wpa_ie_wpa(u8 *wpa_ie, size_t wpa_ie_len,
 	WPA_PUT_LE16(hdr->version, WPA_VERSION);
 	pos = (u8 *) (hdr + 1);
 
-	if (group_cipher == WPA_CIPHER_CCMP) {
-		RSN_SELECTOR_PUT(pos, WPA_CIPHER_SUITE_CCMP);
-	} else if (group_cipher == WPA_CIPHER_TKIP) {
-		RSN_SELECTOR_PUT(pos, WPA_CIPHER_SUITE_TKIP);
-	} else if (group_cipher == WPA_CIPHER_WEP104) {
-		RSN_SELECTOR_PUT(pos, WPA_CIPHER_SUITE_WEP104);
-	} else if (group_cipher == WPA_CIPHER_WEP40) {
-		RSN_SELECTOR_PUT(pos, WPA_CIPHER_SUITE_WEP40);
-	} else {
+	suite = wpa_cipher_to_suite(WPA_PROTO_WPA, group_cipher);
+	if (suite == 0) {
 		wpa_printf(MSG_WARNING, "Invalid group cipher (%d).",
 			   group_cipher);
 		return -1;
 	}
+	RSN_SELECTOR_PUT(pos, suite);
 	pos += WPA_SELECTOR_LEN;
 
 	*pos++ = 1;
 	*pos++ = 0;
-	if (pairwise_cipher == WPA_CIPHER_CCMP) {
-		RSN_SELECTOR_PUT(pos, WPA_CIPHER_SUITE_CCMP);
-	} else if (pairwise_cipher == WPA_CIPHER_TKIP) {
-		RSN_SELECTOR_PUT(pos, WPA_CIPHER_SUITE_TKIP);
-	} else if (pairwise_cipher == WPA_CIPHER_NONE) {
-		RSN_SELECTOR_PUT(pos, WPA_CIPHER_SUITE_NONE);
-	} else {
+	suite = wpa_cipher_to_suite(WPA_PROTO_WPA, pairwise_cipher);
+	if (suite == 0 ||
+	    (!wpa_cipher_valid_pairwise(pairwise_cipher) &&
+	     pairwise_cipher != WPA_CIPHER_NONE)) {
 		wpa_printf(MSG_WARNING, "Invalid pairwise cipher (%d).",
 			   pairwise_cipher);
 		return -1;
 	}
+	RSN_SELECTOR_PUT(pos, suite);
 	pos += WPA_SELECTOR_LEN;
 
 	*pos++ = 1;
@@ -122,6 +109,7 @@ static int wpa_gen_wpa_ie_rsn(u8 *rsn_ie, size_t rsn_ie_len,
 	u8 *pos;
 	struct rsn_ie_hdr *hdr;
 	u16 capab;
+	u32 suite;
 
 	if (rsn_ie_len < sizeof(*hdr) + RSN_SELECTOR_LEN +
 	    2 + RSN_SELECTOR_LEN + 2 + RSN_SELECTOR_LEN + 2 +
@@ -136,34 +124,26 @@ static int wpa_gen_wpa_ie_rsn(u8 *rsn_ie, size_t rsn_ie_len,
 	WPA_PUT_LE16(hdr->version, RSN_VERSION);
 	pos = (u8 *) (hdr + 1);
 
-	if (group_cipher == WPA_CIPHER_CCMP) {
-		RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_CCMP);
-	} else if (group_cipher == WPA_CIPHER_TKIP) {
-		RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_TKIP);
-	} else if (group_cipher == WPA_CIPHER_WEP104) {
-		RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_WEP104);
-	} else if (group_cipher == WPA_CIPHER_WEP40) {
-		RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_WEP40);
-	} else {
+	suite = wpa_cipher_to_suite(WPA_PROTO_RSN, group_cipher);
+	if (suite == 0) {
 		wpa_printf(MSG_WARNING, "Invalid group cipher (%d).",
 			   group_cipher);
 		return -1;
 	}
+	RSN_SELECTOR_PUT(pos, suite);
 	pos += RSN_SELECTOR_LEN;
 
 	*pos++ = 1;
 	*pos++ = 0;
-	if (pairwise_cipher == WPA_CIPHER_CCMP) {
-		RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_CCMP);
-	} else if (pairwise_cipher == WPA_CIPHER_TKIP) {
-		RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_TKIP);
-	} else if (pairwise_cipher == WPA_CIPHER_NONE) {
-		RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_NONE);
-	} else {
+	suite = wpa_cipher_to_suite(WPA_PROTO_RSN, pairwise_cipher);
+	if (suite == 0 ||
+	    (!wpa_cipher_valid_pairwise(pairwise_cipher) &&
+	     pairwise_cipher != WPA_CIPHER_NONE)) {
 		wpa_printf(MSG_WARNING, "Invalid pairwise cipher (%d).",
 			   pairwise_cipher);
 		return -1;
 	}
+	RSN_SELECTOR_PUT(pos, suite);
 	pos += RSN_SELECTOR_LEN;
 
 	*pos++ = 1;
@@ -424,11 +404,19 @@ int wpa_supplicant_parse_ies(const u8 *buf, size_t len,
 					    pos, 2 + pos[1]);
 			}
 		} else if (*pos == WLAN_EID_LINK_ID) {
-			ie->lnkid = pos;
-			ie->lnkid_len = pos[1] + 2;
+			if (pos[1] >= 18) {
+				ie->lnkid = pos;
+				ie->lnkid_len = pos[1] + 2;
+			}
 		} else if (*pos == WLAN_EID_EXT_CAPAB) {
 			ie->ext_capab = pos;
 			ie->ext_capab_len = pos[1] + 2;
+		} else if (*pos == WLAN_EID_SUPP_RATES) {
+			ie->supp_rates = pos;
+			ie->supp_rates_len = pos[1] + 2;
+		} else if (*pos == WLAN_EID_EXT_SUPP_RATES) {
+			ie->ext_supp_rates = pos;
+			ie->ext_supp_rates_len = pos[1] + 2;
 		} else if (*pos == WLAN_EID_VENDOR_SPECIFIC) {
 			ret = wpa_parse_generic(pos, end, ie);
 			if (ret < 0)

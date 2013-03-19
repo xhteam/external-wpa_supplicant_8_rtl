@@ -1,15 +1,9 @@
 /*
  * hostapd / Configuration helper functions
- * Copyright (c) 2003-2009, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2003-2012, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "utils/includes.h"
@@ -93,6 +87,8 @@ void hostapd_config_defaults_bss(struct hostapd_bss_config *bss)
 #ifdef CONFIG_IEEE80211R
 	bss->ft_over_ds = 1;
 #endif /* CONFIG_IEEE80211R */
+
+	bss->radius_das_time_window = 300;
 }
 
 
@@ -108,9 +104,9 @@ struct hostapd_config * hostapd_config_defaults(void)
 	const struct hostapd_wmm_ac_params ac_be =
 		{ aCWmin, aCWmax, 3, 0, 0 }; /* best effort traffic */
 	const struct hostapd_wmm_ac_params ac_vi = /* video traffic */
-		{ aCWmin - 1, aCWmin, 2, 3000 / 32, 1 };
+		{ aCWmin - 1, aCWmin, 2, 3000 / 32, 0 };
 	const struct hostapd_wmm_ac_params ac_vo = /* voice traffic */
-		{ aCWmin - 2, aCWmin - 1, 2, 1500 / 32, 1 };
+		{ aCWmin - 2, aCWmin - 1, 2, 1500 / 32, 0 };
 	const struct hostapd_tx_queue_params txq_bk =
 		{ 7, ecw2cw(aCWmin), ecw2cw(aCWmax), 0 };
 	const struct hostapd_tx_queue_params txq_be =
@@ -342,6 +338,30 @@ static void hostapd_config_free_radius(struct hostapd_radius_server *servers,
 }
 
 
+struct hostapd_radius_attr *
+hostapd_config_get_radius_attr(struct hostapd_radius_attr *attr, u8 type)
+{
+	for (; attr; attr = attr->next) {
+		if (attr->type == type)
+			return attr;
+	}
+	return NULL;
+}
+
+
+static void hostapd_config_free_radius_attr(struct hostapd_radius_attr *attr)
+{
+	struct hostapd_radius_attr *prev;
+
+	while (attr) {
+		prev = attr;
+		attr = attr->next;
+		wpabuf_free(prev->val);
+		os_free(prev);
+	}
+}
+
+
 static void hostapd_config_free_eap_user(struct hostapd_eap_user *user)
 {
 	os_free(user->identity);
@@ -398,6 +418,8 @@ static void hostapd_config_free_bss(struct hostapd_bss_config *conf)
 				   conf->radius->num_auth_servers);
 	hostapd_config_free_radius(conf->radius->acct_servers,
 				   conf->radius->num_acct_servers);
+	hostapd_config_free_radius_attr(conf->radius_auth_req_attr);
+	hostapd_config_free_radius_attr(conf->radius_acct_req_attr);
 	os_free(conf->rsn_preauth_interfaces);
 	os_free(conf->ctrl_interface);
 	os_free(conf->ca_cert);
@@ -412,6 +434,7 @@ static void hostapd_config_free_bss(struct hostapd_bss_config *conf)
 	os_free(conf->radius_server_clients);
 	os_free(conf->test_socket);
 	os_free(conf->radius);
+	os_free(conf->radius_das_shared_secret);
 	hostapd_config_free_vlan(conf);
 	if (conf->ssid.dyn_vlan_keys) {
 		struct hostapd_ssid *ssid = &conf->ssid;
@@ -425,6 +448,8 @@ static void hostapd_config_free_bss(struct hostapd_bss_config *conf)
 		os_free(ssid->dyn_vlan_keys);
 		ssid->dyn_vlan_keys = NULL;
 	}
+
+	os_free(conf->time_zone);
 
 #ifdef CONFIG_IEEE80211R
 	{
@@ -466,7 +491,30 @@ static void hostapd_config_free_bss(struct hostapd_bss_config *conf)
 	os_free(conf->model_description);
 	os_free(conf->model_url);
 	os_free(conf->upc);
+	wpabuf_free(conf->wps_nfc_dh_pubkey);
+	wpabuf_free(conf->wps_nfc_dh_privkey);
+	wpabuf_free(conf->wps_nfc_dev_pw);
 #endif /* CONFIG_WPS */
+
+	os_free(conf->roaming_consortium);
+	os_free(conf->venue_name);
+	os_free(conf->nai_realm_data);
+	os_free(conf->network_auth_type);
+	os_free(conf->anqp_3gpp_cell_net);
+	os_free(conf->domain_name);
+
+#ifdef CONFIG_RADIUS_TEST
+	os_free(conf->dump_msk_file);
+#endif /* CONFIG_RADIUS_TEST */
+
+#ifdef CONFIG_HS20
+	os_free(conf->hs20_oper_friendly_name);
+	os_free(conf->hs20_wan_metrics);
+	os_free(conf->hs20_connection_capability);
+	os_free(conf->hs20_operating_class);
+#endif /* CONFIG_HS20 */
+
+	wpabuf_free(conf->vendor_elements);
 }
 
 

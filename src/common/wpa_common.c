@@ -2,14 +2,8 @@
  * WPA/RSN - Shared functions for supplicant and authenticator
  * Copyright (c) 2002-2008, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -49,8 +43,10 @@ int wpa_eapol_key_mic(const u8 *key, int ver, const u8 *buf, size_t len,
 	u8 hash[SHA1_MAC_LEN];
 
 	switch (ver) {
+#ifndef CONFIG_FIPS
 	case WPA_KEY_INFO_TYPE_HMAC_MD5_RC4:
 		return hmac_md5(key, 16, buf, len, mic);
+#endif /* CONFIG_FIPS */
 	case WPA_KEY_INFO_TYPE_HMAC_SHA1_AES:
 		if (hmac_sha1(key, 16, buf, len, hash))
 			return -1;
@@ -188,6 +184,154 @@ int wpa_ft_mic(const u8 *kck, const u8 *sta_addr, const u8 *ap_addr,
 
 	return 0;
 }
+
+
+static int wpa_ft_parse_ftie(const u8 *ie, size_t ie_len,
+			     struct wpa_ft_ies *parse)
+{
+	const u8 *end, *pos;
+
+	parse->ftie = ie;
+	parse->ftie_len = ie_len;
+
+	pos = ie + sizeof(struct rsn_ftie);
+	end = ie + ie_len;
+
+	while (pos + 2 <= end && pos + 2 + pos[1] <= end) {
+		switch (pos[0]) {
+		case FTIE_SUBELEM_R1KH_ID:
+			if (pos[1] != FT_R1KH_ID_LEN) {
+				wpa_printf(MSG_DEBUG, "FT: Invalid R1KH-ID "
+					   "length in FTIE: %d", pos[1]);
+				return -1;
+			}
+			parse->r1kh_id = pos + 2;
+			break;
+		case FTIE_SUBELEM_GTK:
+			parse->gtk = pos + 2;
+			parse->gtk_len = pos[1];
+			break;
+		case FTIE_SUBELEM_R0KH_ID:
+			if (pos[1] < 1 || pos[1] > FT_R0KH_ID_MAX_LEN) {
+				wpa_printf(MSG_DEBUG, "FT: Invalid R0KH-ID "
+					   "length in FTIE: %d", pos[1]);
+				return -1;
+			}
+			parse->r0kh_id = pos + 2;
+			parse->r0kh_id_len = pos[1];
+			break;
+#ifdef CONFIG_IEEE80211W
+		case FTIE_SUBELEM_IGTK:
+			parse->igtk = pos + 2;
+			parse->igtk_len = pos[1];
+			break;
+#endif /* CONFIG_IEEE80211W */
+		}
+
+		pos += 2 + pos[1];
+	}
+
+	return 0;
+}
+
+
+int wpa_ft_parse_ies(const u8 *ies, size_t ies_len,
+		     struct wpa_ft_ies *parse)
+{
+	const u8 *end, *pos;
+	struct wpa_ie_data data;
+	int ret;
+	const struct rsn_ftie *ftie;
+	int prot_ie_count = 0;
+
+	os_memset(parse, 0, sizeof(*parse));
+	if (ies == NULL)
+		return 0;
+
+	pos = ies;
+	end = ies + ies_len;
+	while (pos + 2 <= end && pos + 2 + pos[1] <= end) {
+		switch (pos[0]) {
+		case WLAN_EID_RSN:
+			parse->rsn = pos + 2;
+			parse->rsn_len = pos[1];
+			ret = wpa_parse_wpa_ie_rsn(parse->rsn - 2,
+						   parse->rsn_len + 2,
+						   &data);
+			if (ret < 0) {
+				wpa_printf(MSG_DEBUG, "FT: Failed to parse "
+					   "RSN IE: %d", ret);
+				return -1;
+			}
+			if (data.num_pmkid == 1 && data.pmkid)
+				parse->rsn_pmkid = data.pmkid;
+			break;
+		case WLAN_EID_MOBILITY_DOMAIN:
+			parse->mdie = pos + 2;
+			parse->mdie_len = pos[1];
+			break;
+		case WLAN_EID_FAST_BSS_TRANSITION:
+			if (pos[1] < sizeof(*ftie))
+				return -1;
+			ftie = (const struct rsn_ftie *) (pos + 2);
+			prot_ie_count = ftie->mic_control[1];
+			if (wpa_ft_parse_ftie(pos + 2, pos[1], parse) < 0)
+				return -1;
+			break;
+		case WLAN_EID_TIMEOUT_INTERVAL:
+			parse->tie = pos + 2;
+			parse->tie_len = pos[1];
+			break;
+		case WLAN_EID_RIC_DATA:
+			if (parse->ric == NULL)
+				parse->ric = pos;
+			break;
+		}
+
+		pos += 2 + pos[1];
+	}
+
+	if (prot_ie_count == 0)
+		return 0; /* no MIC */
+
+	/*
+	 * Check that the protected IE count matches with IEs included in the
+	 * frame.
+	 */
+	if (parse->rsn)
+		prot_ie_count--;
+	if (parse->mdie)
+		prot_ie_count--;
+	if (parse->ftie)
+		prot_ie_count--;
+	if (prot_ie_count < 0) {
+		wpa_printf(MSG_DEBUG, "FT: Some required IEs not included in "
+			   "the protected IE count");
+		return -1;
+	}
+
+	if (prot_ie_count == 0 && parse->ric) {
+		wpa_printf(MSG_DEBUG, "FT: RIC IE(s) in the frame, but not "
+			   "included in protected IE count");
+		return -1;
+	}
+
+	/* Determine the end of the RIC IE(s) */
+	pos = parse->ric;
+	while (pos && pos + 2 <= end && pos + 2 + pos[1] <= end &&
+	       prot_ie_count) {
+		prot_ie_count--;
+		pos += 2 + pos[1];
+	}
+	parse->ric_len = pos - parse->ric;
+	if (prot_ie_count) {
+		wpa_printf(MSG_DEBUG, "FT: %d protected IEs missing from "
+			   "frame", (int) prot_ie_count);
+		return -1;
+	}
+
+	return 0;
+}
 #endif /* CONFIG_IEEE80211R */
 
 
@@ -208,6 +352,8 @@ static int rsn_selector_to_bitfield(const u8 *s)
 	if (RSN_SELECTOR_GET(s) == RSN_CIPHER_SUITE_AES_128_CMAC)
 		return WPA_CIPHER_AES_128_CMAC;
 #endif /* CONFIG_IEEE80211W */
+	if (RSN_SELECTOR_GET(s) == RSN_CIPHER_SUITE_GCMP)
+		return WPA_CIPHER_GCMP;
 	return 0;
 }
 
@@ -764,6 +910,8 @@ const char * wpa_cipher_txt(int cipher)
 		return "CCMP";
 	case WPA_CIPHER_CCMP | WPA_CIPHER_TKIP:
 		return "CCMP+TKIP";
+	case WPA_CIPHER_GCMP:
+		return "GCMP";
 	default:
 		return "UNKNOWN";
 	}
@@ -925,3 +1073,138 @@ int wpa_insert_pmkid(u8 *ies, size_t ies_len, const u8 *pmkid)
 	return added;
 }
 #endif /* CONFIG_IEEE80211R */
+
+
+int wpa_cipher_key_len(int cipher)
+{
+	switch (cipher) {
+	case WPA_CIPHER_CCMP:
+	case WPA_CIPHER_GCMP:
+		return 16;
+	case WPA_CIPHER_TKIP:
+		return 32;
+	case WPA_CIPHER_WEP104:
+		return 13;
+	case WPA_CIPHER_WEP40:
+		return 5;
+	}
+
+	return 0;
+}
+
+
+int wpa_cipher_rsc_len(int cipher)
+{
+	switch (cipher) {
+	case WPA_CIPHER_CCMP:
+	case WPA_CIPHER_GCMP:
+	case WPA_CIPHER_TKIP:
+		return 6;
+	case WPA_CIPHER_WEP104:
+	case WPA_CIPHER_WEP40:
+		return 0;
+	}
+
+	return 0;
+}
+
+
+int wpa_cipher_to_alg(int cipher)
+{
+	switch (cipher) {
+	case WPA_CIPHER_CCMP:
+		return WPA_ALG_CCMP;
+	case WPA_CIPHER_GCMP:
+		return WPA_ALG_GCMP;
+	case WPA_CIPHER_TKIP:
+		return WPA_ALG_TKIP;
+	case WPA_CIPHER_WEP104:
+	case WPA_CIPHER_WEP40:
+		return WPA_ALG_WEP;
+	}
+	return WPA_ALG_NONE;
+}
+
+
+int wpa_cipher_valid_pairwise(int cipher)
+{
+	return cipher == WPA_CIPHER_CCMP ||
+		cipher == WPA_CIPHER_GCMP ||
+		cipher == WPA_CIPHER_TKIP;
+}
+
+
+u32 wpa_cipher_to_suite(int proto, int cipher)
+{
+	if (cipher & WPA_CIPHER_CCMP)
+		return (proto == WPA_PROTO_RSN ?
+			RSN_CIPHER_SUITE_CCMP : WPA_CIPHER_SUITE_CCMP);
+	if (cipher & WPA_CIPHER_GCMP)
+		return RSN_CIPHER_SUITE_GCMP;
+	if (cipher & WPA_CIPHER_TKIP)
+		return (proto == WPA_PROTO_RSN ?
+			RSN_CIPHER_SUITE_TKIP : WPA_CIPHER_SUITE_TKIP);
+	if (cipher & WPA_CIPHER_WEP104)
+		return (proto == WPA_PROTO_RSN ?
+			RSN_CIPHER_SUITE_WEP104 : WPA_CIPHER_SUITE_WEP104);
+	if (cipher & WPA_CIPHER_WEP40)
+		return (proto == WPA_PROTO_RSN ?
+			RSN_CIPHER_SUITE_WEP40 : WPA_CIPHER_SUITE_WEP40);
+	if (cipher & WPA_CIPHER_NONE)
+		return (proto == WPA_PROTO_RSN ?
+			RSN_CIPHER_SUITE_NONE : WPA_CIPHER_SUITE_NONE);
+	return 0;
+}
+
+
+int rsn_cipher_put_suites(u8 *pos, int ciphers)
+{
+	int num_suites = 0;
+
+	if (ciphers & WPA_CIPHER_CCMP) {
+		RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_CCMP);
+		pos += RSN_SELECTOR_LEN;
+		num_suites++;
+	}
+	if (ciphers & WPA_CIPHER_GCMP) {
+		RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_GCMP);
+		pos += RSN_SELECTOR_LEN;
+		num_suites++;
+	}
+	if (ciphers & WPA_CIPHER_TKIP) {
+		RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_TKIP);
+		pos += RSN_SELECTOR_LEN;
+		num_suites++;
+	}
+	if (ciphers & WPA_CIPHER_NONE) {
+		RSN_SELECTOR_PUT(pos, RSN_CIPHER_SUITE_NONE);
+		pos += RSN_SELECTOR_LEN;
+		num_suites++;
+	}
+
+	return num_suites;
+}
+
+
+int wpa_cipher_put_suites(u8 *pos, int ciphers)
+{
+	int num_suites = 0;
+
+	if (ciphers & WPA_CIPHER_CCMP) {
+		RSN_SELECTOR_PUT(pos, WPA_CIPHER_SUITE_CCMP);
+		pos += WPA_SELECTOR_LEN;
+		num_suites++;
+	}
+	if (ciphers & WPA_CIPHER_TKIP) {
+		RSN_SELECTOR_PUT(pos, WPA_CIPHER_SUITE_TKIP);
+		pos += WPA_SELECTOR_LEN;
+		num_suites++;
+	}
+	if (ciphers & WPA_CIPHER_NONE) {
+		RSN_SELECTOR_PUT(pos, WPA_CIPHER_SUITE_NONE);
+		pos += WPA_SELECTOR_LEN;
+		num_suites++;
+	}
+
+	return num_suites;
+}

@@ -1,15 +1,9 @@
 /*
  * Wi-Fi Protected Setup - External Registrar
- * Copyright (c) 2009, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2009-2012, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -502,15 +496,60 @@ static void wps_er_get_device_info(struct wps_er_ap *ap)
 }
 
 
+static const char * wps_er_find_wfadevice(const char *data)
+{
+	const char *tag, *tagname, *end;
+	char *val;
+	int found = 0;
+
+	while (!found) {
+		/* Find next <device> */
+		for (;;) {
+			if (xml_next_tag(data, &tag, &tagname, &end))
+				return NULL;
+			data = end;
+			if (!os_strncasecmp(tagname, "device", 6) &&
+			    *tag != '/' &&
+			    (tagname[6] == '>' || !isgraph(tagname[6]))) {
+				break;
+			}
+		}
+
+		/* Check whether deviceType is WFADevice */
+		val = xml_get_first_item(data, "deviceType");
+		if (val == NULL)
+			return NULL;
+		wpa_printf(MSG_DEBUG, "WPS ER: Found deviceType '%s'", val);
+		found = os_strcasecmp(val, "urn:schemas-wifialliance-org:"
+				      "device:WFADevice:1") == 0;
+		os_free(val);
+	}
+
+	return data;
+}
+
+
 static void wps_er_parse_device_description(struct wps_er_ap *ap,
 					    struct wpabuf *reply)
 {
 	/* Note: reply includes null termination after the buffer data */
-	const char *data = wpabuf_head(reply);
+	const char *tmp, *data = wpabuf_head(reply);
 	char *pos;
 
 	wpa_hexdump_ascii(MSG_MSGDUMP, "WPS ER: Device info",
 			  wpabuf_head(reply), wpabuf_len(reply));
+
+	/*
+	 * The root device description may include multiple devices, so first
+	 * find the beginning of the WFADevice description to allow the
+	 * simplistic parser to pick the correct entries.
+	 */
+	tmp = wps_er_find_wfadevice(data);
+	if (tmp == NULL) {
+		wpa_printf(MSG_DEBUG, "WPS ER: WFADevice:1 device not found - "
+			   "trying to parse invalid data");
+	} else
+		data = tmp;
 
 	ap->friendly_name = xml_get_first_item(data, "friendlyName");
 	wpa_printf(MSG_DEBUG, "WPS ER: friendlyName='%s'", ap->friendly_name);
@@ -1957,3 +1996,41 @@ int wps_er_config(struct wps_er *er, const u8 *uuid, const u8 *pin,
 
 	return 0;
 }
+
+
+#ifdef CONFIG_WPS_NFC
+struct wpabuf * wps_er_nfc_config_token(struct wps_er *er, const u8 *uuid)
+{
+	struct wps_er_ap *ap;
+	struct wpabuf *ret;
+	struct wps_data data;
+
+	if (er == NULL)
+		return NULL;
+
+	ap = wps_er_ap_get(er, NULL, uuid);
+	if (ap == NULL)
+		return NULL;
+	if (ap->ap_settings == NULL) {
+		wpa_printf(MSG_DEBUG, "WPS ER: No settings known for the "
+			   "selected AP");
+		return NULL;
+	}
+
+	ret = wpabuf_alloc(500);
+	if (ret == NULL)
+		return NULL;
+
+	os_memset(&data, 0, sizeof(data));
+	data.wps = er->wps;
+	data.use_cred = ap->ap_settings;
+	if (wps_build_version(ret) ||
+	    wps_build_cred(&data, ret) ||
+	    wps_build_wfa_ext(ret, 0, NULL, 0)) {
+		wpabuf_free(ret);
+		return NULL;
+	}
+
+	return ret;
+}
+#endif /* CONFIG_WPS_NFC */

@@ -1,53 +1,32 @@
 /*
  * hostapd - command line interface for hostapd daemon
- * Copyright (c) 2004-2011, Jouni Malinen <j@w1.fi>
+ * Copyright (c) 2004-2012, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
 #include <dirent.h>
 
 #include "common/wpa_ctrl.h"
-#include "common.h"
+#include "utils/common.h"
+#include "utils/eloop.h"
+#include "utils/edit.h"
 #include "common/version.h"
 
 
 static const char *hostapd_cli_version =
 "hostapd_cli v" VERSION_STR "\n"
-"Copyright (c) 2004-2011, Jouni Malinen <j@w1.fi> and contributors";
+"Copyright (c) 2004-2012, Jouni Malinen <j@w1.fi> and contributors";
 
 
 static const char *hostapd_cli_license =
-"This program is free software. You can distribute it and/or modify it\n"
-"under the terms of the GNU General Public License version 2.\n"
-"\n"
-"Alternatively, this software may be distributed under the terms of the\n"
-"BSD license. See README and COPYING for more details.\n";
+"This software may be distributed under the terms of the BSD license.\n"
+"See README for more details.\n";
 
 static const char *hostapd_cli_full_license =
-"This program is free software; you can redistribute it and/or modify\n"
-"it under the terms of the GNU General Public License version 2 as\n"
-"published by the Free Software Foundation.\n"
-"\n"
-"This program is distributed in the hope that it will be useful,\n"
-"but WITHOUT ANY WARRANTY; without even the implied warranty of\n"
-"MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the\n"
-"GNU General Public License for more details.\n"
-"\n"
-"You should have received a copy of the GNU General Public License\n"
-"along with this program; if not, write to the Free Software\n"
-"Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA\n"
-"\n"
-"Alternatively, this software may be distributed under the terms of the\n"
-"BSD license.\n"
+"This software may be distributed under the terms of the BSD license.\n"
 "\n"
 "Redistribution and use in source and binary forms, with or without\n"
 "modification, are permitted provided that the following conditions are\n"
@@ -92,9 +71,15 @@ static const char *commands_help =
 "   wps_pin <uuid> <pin> [timeout] [addr]  add WPS Enrollee PIN\n"
 "   wps_check_pin <PIN>  verify PIN checksum\n"
 "   wps_pbc              indicate button pushed to initiate PBC\n"
+"   wps_cancel           cancel the pending WPS operation\n"
 #ifdef CONFIG_WPS_OOB
 "   wps_oob <type> <path> <method>  use WPS with out-of-band (UFD)\n"
 #endif /* CONFIG_WPS_OOB */
+#ifdef CONFIG_WPS_NFC
+"   wps_nfc_tag_read <hexdump>  report read NFC tag with WPS data\n"
+"   wps_nfc_config_token <WPS/NDEF>  build NFC configuration token\n"
+"   wps_nfc_token <WPS/NDEF/enable/disable>  manager NFC password token\n"
+#endif /* CONFIG_WPS_NFC */
 "   wps_ap_pin <cmd> [params..]  enable/disable AP PIN\n"
 "   wps_config <SSID> <auth> <encr> <key>  configure AP\n"
 #endif /* CONFIG_WPS */
@@ -108,11 +93,17 @@ static const char *commands_help =
 static struct wpa_ctrl *ctrl_conn;
 static int hostapd_cli_quit = 0;
 static int hostapd_cli_attached = 0;
-static const char *ctrl_iface_dir = "/var/run/hostapd";
+
+#ifndef CONFIG_CTRL_IFACE_DIR
+#define CONFIG_CTRL_IFACE_DIR "/var/run/hostapd"
+#endif /* CONFIG_CTRL_IFACE_DIR */
+static const char *ctrl_iface_dir = CONFIG_CTRL_IFACE_DIR;
+
 static char *ctrl_ifname = NULL;
 static const char *pid_file = NULL;
 static const char *action_file = NULL;
 static int ping_interval = 5;
+static int interactive = 0;
 
 
 static void usage(void)
@@ -412,6 +403,13 @@ static int hostapd_cli_cmd_wps_pbc(struct wpa_ctrl *ctrl, int argc,
 }
 
 
+static int hostapd_cli_cmd_wps_cancel(struct wpa_ctrl *ctrl, int argc,
+				      char *argv[])
+{
+	return wpa_ctrl_command(ctrl, "WPS_CANCEL");
+}
+
+
 #ifdef CONFIG_WPS_OOB
 static int hostapd_cli_cmd_wps_oob(struct wpa_ctrl *ctrl, int argc,
 				   char *argv[])
@@ -444,6 +442,77 @@ static int hostapd_cli_cmd_wps_oob(struct wpa_ctrl *ctrl, int argc,
 	return wpa_ctrl_command(ctrl, cmd);
 }
 #endif /* CONFIG_WPS_OOB */
+
+
+#ifdef CONFIG_WPS_NFC
+static int hostapd_cli_cmd_wps_nfc_tag_read(struct wpa_ctrl *ctrl, int argc,
+					    char *argv[])
+{
+	int ret;
+	char *buf;
+	size_t buflen;
+
+	if (argc != 1) {
+		printf("Invalid 'wps_nfc_tag_read' command - one argument "
+		       "is required.\n");
+		return -1;
+	}
+
+	buflen = 18 + os_strlen(argv[0]);
+	buf = os_malloc(buflen);
+	if (buf == NULL)
+		return -1;
+	os_snprintf(buf, buflen, "WPS_NFC_TAG_READ %s", argv[0]);
+
+	ret = wpa_ctrl_command(ctrl, buf);
+	os_free(buf);
+
+	return ret;
+}
+
+
+static int hostapd_cli_cmd_wps_nfc_config_token(struct wpa_ctrl *ctrl,
+						int argc, char *argv[])
+{
+	char cmd[64];
+	int res;
+
+	if (argc != 1) {
+		printf("Invalid 'wps_nfc_config_token' command - one argument "
+		       "is required.\n");
+		return -1;
+	}
+
+	res = os_snprintf(cmd, sizeof(cmd), "WPS_NFC_CONFIG_TOKEN %s",
+			  argv[0]);
+	if (res < 0 || (size_t) res >= sizeof(cmd) - 1) {
+		printf("Too long WPS_NFC_CONFIG_TOKEN command.\n");
+		return -1;
+	}
+	return wpa_ctrl_command(ctrl, cmd);
+}
+
+
+static int hostapd_cli_cmd_wps_nfc_token(struct wpa_ctrl *ctrl,
+					 int argc, char *argv[])
+{
+	char cmd[64];
+	int res;
+
+	if (argc != 1) {
+		printf("Invalid 'wps_nfc_token' command - one argument is "
+		       "required.\n");
+		return -1;
+	}
+
+	res = os_snprintf(cmd, sizeof(cmd), "WPS_NFC_TOKEN %s", argv[0]);
+	if (res < 0 || (size_t) res >= sizeof(cmd) - 1) {
+		printf("Too long WPS_NFC_TOKEN command.\n");
+		return -1;
+	}
+	return wpa_ctrl_command(ctrl, cmd);
+}
+#endif /* CONFIG_WPS_NFC */
 
 
 static int hostapd_cli_cmd_wps_ap_pin(struct wpa_ctrl *ctrl, int argc,
@@ -510,6 +579,26 @@ static int hostapd_cli_cmd_wps_config(struct wpa_ctrl *ctrl, int argc,
 	return wpa_ctrl_command(ctrl, buf);
 }
 #endif /* CONFIG_WPS */
+
+
+static int hostapd_cli_cmd_ess_disassoc(struct wpa_ctrl *ctrl, int argc,
+					char *argv[])
+{
+	char buf[300];
+	int res;
+
+	if (argc < 2) {
+		printf("Invalid 'ess_disassoc' command - two arguments (STA "
+		       "addr and URL) are needed\n");
+		return -1;
+	}
+
+	res = os_snprintf(buf, sizeof(buf), "ESS_DISASSOC %s %s",
+			  argv[0], argv[1]);
+	if (res < 0 || res >= (int) sizeof(buf))
+		return -1;
+	return wpa_ctrl_command(ctrl, buf);
+}
 
 
 static int hostapd_cli_cmd_get_config(struct wpa_ctrl *ctrl, int argc,
@@ -588,6 +677,8 @@ static int hostapd_cli_cmd_license(struct wpa_ctrl *ctrl, int argc,
 static int hostapd_cli_cmd_quit(struct wpa_ctrl *ctrl, int argc, char *argv[])
 {
 	hostapd_cli_quit = 1;
+	if (interactive)
+		eloop_terminate();
 	return 0;
 }
 
@@ -717,12 +808,19 @@ static struct hostapd_cli_cmd hostapd_cli_commands[] = {
 	{ "wps_pin", hostapd_cli_cmd_wps_pin },
 	{ "wps_check_pin", hostapd_cli_cmd_wps_check_pin },
 	{ "wps_pbc", hostapd_cli_cmd_wps_pbc },
+	{ "wps_cancel", hostapd_cli_cmd_wps_cancel },
 #ifdef CONFIG_WPS_OOB
 	{ "wps_oob", hostapd_cli_cmd_wps_oob },
 #endif /* CONFIG_WPS_OOB */
+#ifdef CONFIG_WPS_NFC
+	{ "wps_nfc_tag_read", hostapd_cli_cmd_wps_nfc_tag_read },
+	{ "wps_nfc_config_token", hostapd_cli_cmd_wps_nfc_config_token },
+	{ "wps_nfc_token", hostapd_cli_cmd_wps_nfc_token },
+#endif /* CONFIG_WPS_NFC */
 	{ "wps_ap_pin", hostapd_cli_cmd_wps_ap_pin },
 	{ "wps_config", hostapd_cli_cmd_wps_config },
 #endif /* CONFIG_WPS */
+	{ "ess_disassoc", hostapd_cli_cmd_ess_disassoc },
 	{ "get_config", hostapd_cli_cmd_get_config },
 	{ "help", hostapd_cli_cmd_help },
 	{ "interface", hostapd_cli_cmd_interface },
@@ -801,70 +899,39 @@ static void hostapd_cli_recv_pending(struct wpa_ctrl *ctrl, int in_read,
 }
 
 
-static void hostapd_cli_interactive(void)
+#define max_args 10
+
+static int tokenize_cmd(char *cmd, char *argv[])
 {
-	const int max_args = 10;
-	char cmd[256], *res, *argv[max_args], *pos;
-	int argc;
+	char *pos;
+	int argc = 0;
 
-	printf("\nInteractive mode\n\n");
-
-	do {
-		hostapd_cli_recv_pending(ctrl_conn, 0, 0);
-		printf("> ");
-		alarm(ping_interval);
-		res = fgets(cmd, sizeof(cmd), stdin);
-		alarm(0);
-		if (res == NULL)
-			break;
-		pos = cmd;
-		while (*pos != '\0') {
-			if (*pos == '\n') {
-				*pos = '\0';
-				break;
-			}
+	pos = cmd;
+	for (;;) {
+		while (*pos == ' ')
 			pos++;
+		if (*pos == '\0')
+			break;
+		argv[argc] = pos;
+		argc++;
+		if (argc == max_args)
+			break;
+		if (*pos == '"') {
+			char *pos2 = os_strrchr(pos, '"');
+			if (pos2)
+				pos = pos2 + 1;
 		}
-		argc = 0;
-		pos = cmd;
-		for (;;) {
-			while (*pos == ' ')
-				pos++;
-			if (*pos == '\0')
-				break;
-			argv[argc] = pos;
-			argc++;
-			if (argc == max_args)
-				break;
-			while (*pos != '\0' && *pos != ' ')
-				pos++;
-			if (*pos == ' ')
-				*pos++ = '\0';
-		}
-		if (argc)
-			wpa_request(ctrl_conn, argc, argv);
-	} while (!hostapd_cli_quit);
+		while (*pos != '\0' && *pos != ' ')
+			pos++;
+		if (*pos == ' ')
+			*pos++ = '\0';
+	}
+
+	return argc;
 }
 
 
-static void hostapd_cli_cleanup(void)
-{
-	hostapd_cli_close_connection();
-	if (pid_file)
-		os_daemonize_terminate(pid_file);
-
-	os_program_deinit();
-}
-
-
-static void hostapd_cli_terminate(int sig)
-{
-	hostapd_cli_cleanup();
-	exit(0);
-}
-
-
-static void hostapd_cli_alarm(int sig)
+static void hostapd_cli_ping(void *eloop_ctx, void *timeout_ctx)
 {
 	if (ctrl_conn && _wpa_ctrl_command(ctrl_conn, "PING", 0)) {
 		printf("Connection to hostapd lost - trying to reconnect\n");
@@ -884,7 +951,55 @@ static void hostapd_cli_alarm(int sig)
 	}
 	if (ctrl_conn)
 		hostapd_cli_recv_pending(ctrl_conn, 1, 0);
-	alarm(ping_interval);
+	eloop_register_timeout(ping_interval, 0, hostapd_cli_ping, NULL, NULL);
+}
+
+
+static void hostapd_cli_eloop_terminate(int sig, void *signal_ctx)
+{
+	eloop_terminate();
+}
+
+
+static void hostapd_cli_edit_cmd_cb(void *ctx, char *cmd)
+{
+	char *argv[max_args];
+	int argc;
+	argc = tokenize_cmd(cmd, argv);
+	if (argc)
+		wpa_request(ctrl_conn, argc, argv);
+}
+
+
+static void hostapd_cli_edit_eof_cb(void *ctx)
+{
+	eloop_terminate();
+}
+
+
+static void hostapd_cli_interactive(void)
+{
+	printf("\nInteractive mode\n\n");
+
+	eloop_register_signal_terminate(hostapd_cli_eloop_terminate, NULL);
+	edit_init(hostapd_cli_edit_cmd_cb, hostapd_cli_edit_eof_cb,
+		  NULL, NULL, NULL, NULL);
+	eloop_register_timeout(ping_interval, 0, hostapd_cli_ping, NULL, NULL);
+
+	eloop_run();
+
+	edit_deinit(NULL, NULL);
+	eloop_cancel_timeout(hostapd_cli_ping, NULL, NULL);
+}
+
+
+static void hostapd_cli_cleanup(void)
+{
+	hostapd_cli_close_connection();
+	if (pid_file)
+		os_daemonize_terminate(pid_file);
+
+	os_program_deinit();
 }
 
 
@@ -927,7 +1042,6 @@ static void hostapd_cli_action(struct wpa_ctrl *ctrl)
 
 int main(int argc, char *argv[])
 {
-	int interactive;
 	int warning_displayed = 0;
 	int c;
 	int daemonize = 0;
@@ -975,6 +1089,9 @@ int main(int argc, char *argv[])
 		       hostapd_cli_license);
 	}
 
+	if (eloop_init())
+		return -1;
+
 	for (;;) {
 		if (ctrl_ifname == NULL) {
 			struct dirent *dent;
@@ -1014,10 +1131,6 @@ int main(int argc, char *argv[])
 		continue;
 	}
 
-	signal(SIGINT, hostapd_cli_terminate);
-	signal(SIGTERM, hostapd_cli_terminate);
-	signal(SIGALRM, hostapd_cli_alarm);
-
 	if (interactive || action_file) {
 		if (wpa_ctrl_attach(ctrl_conn) == 0) {
 			hostapd_cli_attached = 1;
@@ -1039,6 +1152,7 @@ int main(int argc, char *argv[])
 		wpa_request(ctrl_conn, argc - optind, &argv[optind]);
 
 	os_free(ctrl_ifname);
+	eloop_destroy();
 	hostapd_cli_cleanup();
 	return 0;
 }

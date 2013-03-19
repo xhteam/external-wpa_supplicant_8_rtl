@@ -2,14 +2,8 @@
  * WPA Supplicant / dbus-based control interface
  * Copyright (c) 2006, Dan Williams <dcbw@redhat.com> and Red Hat, Inc.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -116,7 +110,7 @@ DBusMessage * wpas_dbus_global_add_interface(DBusMessage *message,
 		DBusMessageIter iter_dict;
 		struct wpa_dbus_dict_entry entry;
 
-		if (!wpa_dbus_dict_open_read(&iter, &iter_dict))
+		if (!wpa_dbus_dict_open_read(&iter, &iter_dict, NULL))
 			goto error;
 		while (wpa_dbus_dict_has_dict_entry(&iter_dict)) {
 			if (!wpa_dbus_dict_get_entry(&iter_dict, &entry))
@@ -922,7 +916,7 @@ DBusMessage * wpas_dbus_iface_set_network(DBusMessage *message,
 
 	dbus_message_iter_init(message, &iter);
 
-	if (!wpa_dbus_dict_open_read(&iter, &iter_dict)) {
+	if (!wpa_dbus_dict_open_read(&iter, &iter_dict, NULL)) {
 		reply = wpas_dbus_new_invalid_opts_error(message, NULL);
 		goto out;
 	}
@@ -1202,7 +1196,7 @@ DBusMessage * wpas_dbus_iface_set_smartcard_modules(
 	if (!dbus_message_iter_init(message, &iter))
 		goto error;
 
-	if (!wpa_dbus_dict_open_read(&iter, &iter_dict))
+	if (!wpa_dbus_dict_open_read(&iter, &iter_dict, NULL))
 		goto error;
 
 	while (wpa_dbus_dict_has_dict_entry(&iter_dict)) {
@@ -1324,7 +1318,7 @@ DBusMessage * wpas_dbus_iface_set_blobs(DBusMessage *message,
 
 	dbus_message_iter_init(message, &iter);
 
-	if (!wpa_dbus_dict_open_read(&iter, &iter_dict))
+	if (!wpa_dbus_dict_open_read(&iter, &iter_dict, NULL))
 		return wpas_dbus_new_invalid_opts_error(message, NULL);
 
 	while (wpa_dbus_dict_has_dict_entry(&iter_dict)) {

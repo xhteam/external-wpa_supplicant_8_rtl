@@ -6,8 +6,17 @@ ifndef CFLAGS
 CFLAGS = -MMD -O2 -Wall -g
 endif
 
+PURE_LINUX = y
+ifeq ($(PURE_LINUX), y)
+CFLAGS += -DPURE_LINUX
+endif
+
+CFLAGS += -I../wpa_supplicant
 CFLAGS += -I../src
 CFLAGS += -I../src/utils
+CFLAGS += -I../src/drivers
+
+CFLAGS += -DANDROID -DANDROID_P2P -DREALTEK_WIFI_VENDOR
 
 # Uncomment following line and set the path to your kernel tree include
 # directory if your C library does not include all header files.
@@ -51,6 +60,10 @@ OBJS += ../src/ap/ap_mlme.o
 OBJS += ../src/ap/wpa_auth_ie.o
 OBJS += ../src/ap/preauth_auth.o
 OBJS += ../src/ap/pmksa_cache_auth.o
+OBJS += ../src/ap/ieee802_11_shared.o
+OBJS += ../src/ap/beacon.o
+
+OBJS_c = hostapd_cli.o ../src/common/wpa_ctrl.o ../src/utils/os_$(CONFIG_OS).o
 
 NEED_RC4=y
 NEED_AES=y
@@ -74,9 +87,14 @@ LIBS_h += -lbfd
 endif
 endif
 
-OBJS += ../src/utils/eloop.o
+ifndef CONFIG_ELOOP
+CONFIG_ELOOP=eloop
+endif
+OBJS += ../src/utils/$(CONFIG_ELOOP).o
+OBJS_c += ../src/utils/$(CONFIG_ELOOP).o
 OBJS += ../src/utils/common.o
 OBJS += ../src/utils/wpa_debug.o
+OBJS_c += ../src/utils/wpa_debug.o
 OBJS += ../src/utils/wpabuf.o
 OBJS += ../src/utils/os_$(CONFIG_OS).o
 OBJS += ../src/utils/ip_addr.o
@@ -101,6 +119,7 @@ CONFIG_NO_ACCOUNTING=y
 else
 OBJS += ../src/radius/radius.o
 OBJS += ../src/radius/radius_client.o
+OBJS += ../src/radius/radius_das.o
 endif
 
 ifdef CONFIG_NO_ACCOUNTING
@@ -113,6 +132,12 @@ ifdef CONFIG_NO_VLAN
 CFLAGS += -DCONFIG_NO_VLAN
 else
 OBJS += ../src/ap/vlan_init.o
+ifdef CONFIG_VLAN_NETLINK
+ifdef CONFIG_FULL_DYNAMIC_VLAN
+OBJS += ../src/ap/vlan_util.o
+endif
+CFLAGS += -DCONFIG_VLAN_NETLINK
+endif
 endif
 
 ifdef CONFIG_NO_CTRL_IFACE
@@ -155,8 +180,21 @@ NEED_AES_OMAC1=y
 NEED_AES_UNWRAP=y
 endif
 
+ifdef CONFIG_IEEE80211V
+CFLAGS += -DCONFIG_IEEE80211V
+OBJS += ../src/ap/wnm_ap.o
+endif
+
 ifdef CONFIG_IEEE80211N
 CFLAGS += -DCONFIG_IEEE80211N
+endif
+
+ifdef CONFIG_WNM
+CFLAGS += -DCONFIG_WNM
+endif
+
+ifdef CONFIG_IEEE80211AC
+CFLAGS += -DCONFIG_IEEE80211AC
 endif
 
 include ../src/drivers/drivers.mak
@@ -192,6 +230,14 @@ ifdef CONFIG_EAP_TLS
 CFLAGS += -DEAP_SERVER_TLS
 OBJS += ../src/eap_server/eap_server_tls.o
 TLS_FUNCS=y
+endif
+
+ifdef CONFIG_EAP_UNAUTH_TLS
+CFLAGS += -DEAP_SERVER_UNAUTH_TLS
+ifndef CONFIG_EAP_TLS
+OBJS += ../src/eap_server/eap_server_tls.o
+TLS_FUNCS=y
+endif
 endif
 
 ifdef CONFIG_EAP_PEAP
@@ -427,6 +473,15 @@ ifndef CONFIG_TLS
 CONFIG_TLS=openssl
 endif
 
+ifdef CONFIG_TLSV11
+CFLAGS += -DCONFIG_TLSV11
+endif
+
+ifdef CONFIG_TLSV12
+CFLAGS += -DCONFIG_TLSV12
+NEED_SHA256=y
+endif
+
 ifeq ($(CONFIG_TLS), openssl)
 ifdef TLS_FUNCS
 OBJS += ../src/crypto/tls_openssl.o
@@ -445,10 +500,6 @@ ifeq ($(CONFIG_TLS), gnutls)
 ifdef TLS_FUNCS
 OBJS += ../src/crypto/tls_gnutls.o
 LIBS += -lgnutls -lgpg-error
-ifdef CONFIG_GNUTLS_EXTRA
-CFLAGS += -DCONFIG_GNUTLS_EXTRA
-LIBS += -lgnutls-extra
-endif
 endif
 OBJS += ../src/crypto/crypto_gnutls.o
 HOBJS += ../src/crypto/crypto_gnutls.o
@@ -510,6 +561,9 @@ OBJS += ../src/tls/pkcs8.o
 NEED_SHA256=y
 NEED_BASE64=y
 NEED_TLS_PRF=y
+ifdef CONFIG_TLSV12
+NEED_TLS_PRF_SHA256=y
+endif
 NEED_MODEXP=y
 NEED_CIPHER=y
 CFLAGS += -DCONFIG_TLS_INTERNAL
@@ -623,14 +677,19 @@ OBJS += $(AESOBJS)
 endif
 
 ifdef NEED_SHA1
+ifneq ($(CONFIG_TLS), openssl)
 SHA1OBJS += ../src/crypto/sha1.o
+endif
+SHA1OBJS += ../src/crypto/sha1-prf.o
 ifdef CONFIG_INTERNAL_SHA1
 SHA1OBJS += ../src/crypto/sha1-internal.o
 ifdef NEED_FIPS186_2_PRF
 SHA1OBJS += ../src/crypto/fips_prf_internal.o
 endif
 endif
+ifneq ($(CONFIG_TLS), openssl)
 SHA1OBJS += ../src/crypto/sha1-pbkdf2.o
+endif
 ifdef NEED_T_PRF
 SHA1OBJS += ../src/crypto/sha1-tprf.o
 endif
@@ -669,9 +728,16 @@ endif
 endif
 
 ifdef NEED_SHA256
+CFLAGS += -DCONFIG_SHA256
+ifneq ($(CONFIG_TLS), openssl)
 OBJS += ../src/crypto/sha256.o
+endif
+OBJS += ../src/crypto/sha256-prf.o
 ifdef CONFIG_INTERNAL_SHA256
 OBJS += ../src/crypto/sha256-internal.o
+endif
+ifdef NEED_TLS_PRF_SHA256
+OBJS += ../src/crypto/sha256-tlsprf.o
 endif
 endif
 
@@ -692,6 +758,7 @@ CFLAGS += -DCONFIG_NO_RANDOM_POOL
 else
 OBJS += ../src/crypto/random.o
 HOBJS += ../src/crypto/random.o
+HOBJS += ../src/utils/eloop.o
 HOBJS += $(SHA1OBJS)
 HOBJS += ../src/crypto/md5.o
 endif
@@ -720,7 +787,6 @@ OBJS += ../src/utils/base64.o
 endif
 
 ifdef NEED_AP_MLME
-OBJS += ../src/ap/beacon.o
 OBJS += ../src/ap/wmm.o
 OBJS += ../src/ap/ap_list.o
 OBJS += ../src/ap/ieee802_11.o
@@ -731,9 +797,33 @@ ifdef CONFIG_IEEE80211N
 OBJS += ../src/ap/ieee802_11_ht.o
 endif
 
+ifdef CONFIG_IEEE80211AC
+OBJS += ../src/ap/ieee802_11_vht.o
+endif
+
 ifdef CONFIG_P2P_MANAGER
 CFLAGS += -DCONFIG_P2P_MANAGER
 OBJS += ../src/ap/p2p_hostapd.o
+endif
+
+ifdef CONFIG_HS20
+CFLAGS += -DCONFIG_HS20
+OBJS += ../src/ap/hs20.o
+CONFIG_INTERWORKING=y
+endif
+
+ifdef CONFIG_INTERWORKING
+CFLAGS += -DCONFIG_INTERWORKING
+OBJS += ../src/common/gas.o
+OBJS += ../src/ap/gas_serv.o
+endif
+
+OBJS += ../src/drivers/driver_common.o
+
+ifdef CONFIG_WPA_CLI_EDIT
+OBJS_c += ../src/utils/edit.o
+else
+OBJS_c += ../src/utils/edit_simple.o
 endif
 
 ifdef CONFIG_NO_STDOUT_DEBUG
@@ -742,6 +832,12 @@ endif
 
 ifdef CONFIG_DEBUG_FILE
 CFLAGS += -DCONFIG_DEBUG_FILE
+endif
+
+ifdef CONFIG_SQLITE
+CFLAGS += -DCONFIG_SQLITE
+LIBS += -lsqlite3
+LIBS_h += -lsqlite3
 endif
 
 ALL=hostapd hostapd_cli
@@ -784,10 +880,8 @@ hostapd: $(BCHECK) $(OBJS)
 	$(Q)$(CC) $(LDFLAGS) -o hostapd $(OBJS) $(LIBS)
 	@$(E) "  LD " $@
 
-OBJS_c = hostapd_cli.o ../src/common/wpa_ctrl.o ../src/utils/os_$(CONFIG_OS).o
 ifdef CONFIG_WPA_TRACE
 OBJS_c += ../src/utils/trace.o
-OBJS_c += ../src/utils/wpa_debug.o
 endif
 hostapd_cli: $(OBJS_c)
 	$(Q)$(CC) $(LDFLAGS) -o hostapd_cli $(OBJS_c) $(LIBS_c)

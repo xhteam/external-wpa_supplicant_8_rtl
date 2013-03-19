@@ -2,14 +2,8 @@
  * Wi-Fi Protected Setup
  * Copyright (c) 2007-2009, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -62,17 +56,33 @@ struct wps_data * wps_init(const struct wps_config *cfg)
 		data->dev_password_len = cfg->pin_len;
 	}
 
+#ifdef CONFIG_WPS_NFC
+	if (cfg->wps->ap && !cfg->registrar && cfg->wps->ap_nfc_dev_pw_id) {
+		data->dev_pw_id = cfg->wps->ap_nfc_dev_pw_id;
+		os_free(data->dev_password);
+		data->dev_password =
+			os_malloc(wpabuf_len(cfg->wps->ap_nfc_dev_pw));
+		if (data->dev_password == NULL) {
+			os_free(data);
+			return NULL;
+		}
+		os_memcpy(data->dev_password,
+			  wpabuf_head(cfg->wps->ap_nfc_dev_pw),
+			  wpabuf_len(cfg->wps->ap_nfc_dev_pw));
+		data->dev_password_len = wpabuf_len(cfg->wps->ap_nfc_dev_pw);
+	}
+#endif /* CONFIG_WPS_NFC */
+
 	data->pbc = cfg->pbc;
 	if (cfg->pbc) {
 		/* Use special PIN '00000000' for PBC */
 		data->dev_pw_id = DEV_PW_PUSHBUTTON;
 		os_free(data->dev_password);
-		data->dev_password = os_malloc(8);
+		data->dev_password = (u8 *) os_strdup("00000000");
 		if (data->dev_password == NULL) {
 			os_free(data);
 			return NULL;
 		}
-		os_memset(data->dev_password, '0', 8);
 		data->dev_password_len = 8;
 	}
 
@@ -125,6 +135,12 @@ struct wps_data * wps_init(const struct wps_config *cfg)
  */
 void wps_deinit(struct wps_data *data)
 {
+#ifdef CONFIG_WPS_NFC
+	if (data->registrar && data->nfc_pw_token)
+		wps_registrar_remove_nfc_pw_token(data->wps->registrar,
+						  data->nfc_pw_token);
+#endif /* CONFIG_WPS_NFC */
+
 	if (data->wps_pin_revealed) {
 		wpa_printf(MSG_DEBUG, "WPS: Full PIN information revealed and "
 			   "negotiation failed");
@@ -143,6 +159,7 @@ void wps_deinit(struct wps_data *data)
 	wps_device_data_free(&data->peer_dev);
 	os_free(data->new_ap_settings);
 	dh5_free(data->dh_ctx);
+	os_free(data->nfc_pw_token);
 	os_free(data);
 }
 
@@ -270,7 +287,8 @@ int wps_is_selected_pin_registrar(const struct wpabuf *msg)
  * @msg: WPS IE contents from Beacon or Probe Response frame
  * @addr: MAC address to search for
  * @ver1_compat: Whether to use version 1 compatibility mode
- * Returns: 1 if address is authorized, 0 if not
+ * Returns: 2 if the specified address is explicit authorized, 1 if address is
+ * authorized (broadcast), 0 if not
  */
 int wps_is_addr_authorized(const struct wpabuf *msg, const u8 *addr,
 			   int ver1_compat)
@@ -296,8 +314,9 @@ int wps_is_addr_authorized(const struct wpabuf *msg, const u8 *addr,
 
 	pos = attr.authorized_macs;
 	for (i = 0; i < attr.authorized_macs_len / ETH_ALEN; i++) {
-		if (os_memcmp(pos, addr, ETH_ALEN) == 0 ||
-		    os_memcmp(pos, bcast, ETH_ALEN) == 0)
+		if (os_memcmp(pos, addr, ETH_ALEN) == 0)
+			return 2;
+		if (os_memcmp(pos, bcast, ETH_ALEN) == 0)
 			return 1;
 		pos += ETH_ALEN;
 	}
@@ -351,6 +370,19 @@ const u8 * wps_get_uuid_e(const struct wpabuf *msg)
 	if (wps_parse_msg(msg, &attr) < 0)
 		return NULL;
 	return attr.uuid_e;
+}
+
+
+/**
+ * wps_is_20 - Check whether WPS attributes claim support for WPS 2.0
+ */
+int wps_is_20(const struct wpabuf *msg)
+{
+	struct wps_parse_attr attr;
+
+	if (msg == NULL || wps_parse_msg(msg, &attr) < 0)
+		return 0;
+	return attr.version2 != NULL;
 }
 
 
@@ -425,7 +457,8 @@ struct wpabuf * wps_build_assoc_resp_ie(void)
 
 /**
  * wps_build_probe_req_ie - Build WPS IE for Probe Request
- * @pbc: Whether searching for PBC mode APs
+ * @pw_id: Password ID (DEV_PW_PUSHBUTTON for active PBC and DEV_PW_DEFAULT for
+ * most other use cases)
  * @dev: Device attributes
  * @uuid: Own UUID
  * @req_type: Value for Request Type attribute
@@ -436,14 +469,13 @@ struct wpabuf * wps_build_assoc_resp_ie(void)
  *
  * The caller is responsible for freeing the buffer.
  */
-struct wpabuf * wps_build_probe_req_ie(int pbc, struct wps_device_data *dev,
+struct wpabuf * wps_build_probe_req_ie(u16 pw_id, struct wps_device_data *dev,
 				       const u8 *uuid,
 				       enum wps_request_type req_type,
 				       unsigned int num_req_dev_types,
 				       const u8 *req_dev_types)
 {
 	struct wpabuf *ie;
-	u16 methods = 0;
 
 	wpa_printf(MSG_DEBUG, "WPS: Building WPS IE for Probe Request");
 
@@ -451,42 +483,15 @@ struct wpabuf * wps_build_probe_req_ie(int pbc, struct wps_device_data *dev,
 	if (ie == NULL)
 		return NULL;
 
-	methods |= WPS_CONFIG_PUSHBUTTON;
-#ifdef CONFIG_WPS2
-	/*
-	 * TODO: Should figure out whether this device has a physical or
-	 * virtual pushbutton.
-	 */
-	methods |= WPS_CONFIG_VIRT_PUSHBUTTON;
-#endif /* CONFIG_WPS2 */
-
-	/*
-	 * TODO: Should figure out whether this Probe Request was triggered
-	 * using physical or virtual display. Also, if the device has a PIN on
-	 * a label, that should be indicated here.
-	 */
-	methods |= WPS_CONFIG_DISPLAY |
-#ifdef CONFIG_WPS2
-		WPS_CONFIG_VIRT_DISPLAY |
-#endif /* CONFIG_WPS2 */
-		WPS_CONFIG_KEYPAD;
-#ifdef CONFIG_WPS_UFD
-	methods |= WPS_CONFIG_USBA;
-#endif /* CONFIG_WPS_UFD */
-#ifdef CONFIG_WPS_NFC
-	methods |= WPS_CONFIG_NFC_INTERFACE;
-#endif /* CONFIG_WPS_NFC */
-
 	if (wps_build_version(ie) ||
 	    wps_build_req_type(ie, req_type) ||
-	    wps_build_config_methods(ie, methods) ||
+	    wps_build_config_methods(ie, dev->config_methods) ||
 	    wps_build_uuid_e(ie, uuid) ||
 	    wps_build_primary_dev_type(dev, ie) ||
 	    wps_build_rf_bands(dev, ie) ||
 	    wps_build_assoc_state(NULL, ie) ||
 	    wps_build_config_error(ie, WPS_CFG_NO_ERROR) ||
-	    wps_build_dev_password_id(ie, pbc ? DEV_PW_PUSHBUTTON :
-				      DEV_PW_DEFAULT) ||
+	    wps_build_dev_password_id(ie, pw_id) ||
 #ifdef CONFIG_WPS2
 	    wps_build_manufacturer(dev, ie) ||
 	    wps_build_model_name(dev, ie) ||

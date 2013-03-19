@@ -2,14 +2,8 @@
  * Doubly-linked list
  * Copyright (c) 2009, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #ifndef LIST_H
@@ -94,5 +88,8 @@ static inline unsigned int dl_list_len(struct dl_list *list)
 	for (item = dl_list_entry((list)->prev, type, member); \
 	     &item->member != (list); \
 	     item = dl_list_entry(item->member.prev, type, member))
+
+#define DEFINE_DL_LIST(name) \
+	struct dl_list name = { &(name), &(name) }
 
 #endif /* LIST_H */

@@ -3,14 +3,8 @@
  * Copyright (c) 2004, Sam Leffler <sam@errno.com>
  * Copyright (c) 2004, 2Wire, Inc
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  */
 
 #include "includes.h"
@@ -1334,8 +1328,8 @@ wpa_driver_bsd_add_scan_entry(struct wpa_scan_results *res,
 
 	result->ie_len = pos - (u8 *)(result + 1);
 
-	tmp = os_realloc(res->res,
-			 (res->num + 1) * sizeof(struct wpa_scan_res *));
+	tmp = os_realloc_array(res->res, res->num + 1,
+			       sizeof(struct wpa_scan_res *));
 	if (tmp == NULL) {
 		os_free(result);
 		return;

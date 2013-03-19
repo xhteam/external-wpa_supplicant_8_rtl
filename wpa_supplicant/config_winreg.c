@@ -2,14 +2,8 @@
  * WPA Supplicant / Configuration backend: Windows registry
  * Copyright (c) 2003-2008, Jouni Malinen <j@w1.fi>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * Alternatively, this software may be distributed under the terms of BSD
- * license.
- *
- * See README and COPYING for more details.
+ * This software may be distributed under the terms of the BSD license.
+ * See README for more details.
  *
  * This file implements a configuration backend for Windows registry. All the
  * configuration information is stored in the registry and the format for
@@ -348,15 +342,6 @@ static struct wpa_ssid * wpa_config_read_network(HKEY hk, const TCHAR *netw,
 			errors++;
 		}
 		wpa_config_update_psk(ssid);
-	}
-
-	if ((ssid->key_mgmt & (WPA_KEY_MGMT_PSK | WPA_KEY_MGMT_FT_PSK |
-			       WPA_KEY_MGMT_PSK_SHA256)) &&
-	    !ssid->psk_set) {
-		wpa_printf(MSG_ERROR, "WPA-PSK accepted for key management, "
-			   "but no PSK configured for network '" TSTR "'.",
-			   netw);
-		errors++;
 	}
 
 	if ((ssid->group_cipher & WPA_CIPHER_CCMP) &&
